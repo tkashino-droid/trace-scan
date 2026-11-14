@@ -1,0 +1,254 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#1f3a5f">
+<link rel="manifest" href="manifest.json">
+<link rel="apple-touch-icon" href="icon.svg">
+<title>Trace Scan</title>
+<style>
+:root{--bg:#f4f6f9;--card:#fff;--ink:#14213d;--muted:#5c677d;--ok:#1e9e3a;--ng:#d21f1f;--warn:#e08a00;--line:#d9dee7;--accent:#1f3a5f}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.45 system-ui,-apple-system,"Segoe UI",Roboto,"Noto Sans JP",sans-serif}
+header{background:var(--accent);color:#fff;padding:12px 16px;display:flex;justify-content:space-between;align-items:center;gap:8px}
+header h1{font-size:18px;margin:0}
+.net{font-size:13px;padding:3px 10px;border-radius:999px;background:#ffffff26;white-space:nowrap}
+main{max-width:640px;margin:0 auto;padding:12px 16px 32px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:12px;margin-bottom:12px}
+.cam{position:relative;background:#000;border-radius:10px;overflow:hidden;aspect-ratio:4/3}
+.cam video{width:100%;height:100%;object-fit:cover;display:block}
+.cam .frame{position:absolute;inset:14%;border:3px solid #ffffffb0;border-radius:12px;pointer-events:none}
+.cam .hint{position:absolute;left:0;right:0;bottom:8px;text-align:center;color:#fff;font-size:14px;text-shadow:0 1px 3px #000}
+.cam.off .frame{display:none}
+button{font:inherit;border:0;border-radius:10px;padding:12px 16px;font-weight:600;cursor:pointer}
+.primary{background:var(--accent);color:#fff}
+.secondary{background:#e7ebf2;color:var(--ink)}
+button:disabled{opacity:.5}
+.row{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+.row>button{flex:1;min-width:140px}
+#flash{display:none;margin-top:10px;padding:14px;border-radius:10px;color:#fff;font-weight:700;font-size:18px;text-align:center}
+#flash small{display:block;font-weight:400;font-size:14px;opacity:.95}
+.stats{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;text-align:center}
+.stats b{display:block;font-size:24px}
+.stats span{font-size:12px;color:var(--muted)}
+table{width:100%;border-collapse:collapse;font-size:14px}
+th,td{text-align:left;padding:6px 4px;border-bottom:1px solid var(--line);vertical-align:top}
+th{font-size:12px;color:var(--muted);font-weight:600}
+.pill{display:inline-block;padding:1px 8px;border-radius:999px;font-size:12px;font-weight:700;color:#fff}
+.pill.OK{background:var(--ok)}.pill.NG{background:var(--ng)}
+.sent{color:var(--ok);font-size:12px}.wait{color:var(--warn);font-size:12px}
+.muted{color:var(--muted);font-size:13px}
+input[type=url],input[type=text]{width:100%;font:inherit;padding:10px;border:1px solid var(--line);border-radius:8px}
+details summary{cursor:pointer;font-weight:600}
+#msg{font-size:14px;margin-top:8px;min-height:1.4em}
+</style>
+</head>
+<body>
+<header><h1>Trace Scan</h1><span class="net" id="net">…</span></header>
+<main>
+  <section class="card">
+    <div class="cam off" id="cam"><video id="video" playsinline muted></video><div class="frame"></div><div class="hint" id="hint">Press START / スタートを押す</div></div>
+    <div class="row" style="margin-top:10px">
+      <button class="primary" id="start">START SCAN</button>
+      <button class="secondary" id="stop" disabled>STOP</button>
+    </div>
+    <div id="flash"></div>
+  </section>
+
+  <section class="card">
+    <div class="stats">
+      <div><b id="nAll">0</b><span>Saved on phone<br>端末に保存</span></div>
+      <div><b id="nWait">0</b><span>Not sent<br>未送信</span></div>
+      <div><b id="nSent">0</b><span>Sent<br>送信済み</span></div>
+    </div>
+    <div class="row" style="margin-top:10px"><button class="primary" id="send">SEND NOW / 今すぐ送信</button></div>
+    <div id="msg" class="muted"></div>
+  </section>
+
+  <section class="card">
+    <table><thead><tr><th>S/N</th><th>Stage</th><th>Result</th><th>Time</th><th></th></tr></thead><tbody id="list"></tbody></table>
+    <p class="muted" id="more"></p>
+  </section>
+
+  <section class="card">
+    <details id="settings"><summary>Settings / 設定</summary>
+      <p class="muted">Google Apps Script URL (…/exec)</p>
+      <input type="url" id="url" placeholder="https://script.google.com/macros/s/…/exec">
+      <p class="muted">Phone name / 端末名 (optional)</p>
+      <input type="text" id="phone" placeholder="e.g. PHONE-01">
+      <div class="row" style="margin-top:10px"><button class="secondary" id="save">SAVE / 保存</button><button class="secondary" id="test">TEST / 接続テスト</button></div>
+      <div class="row" style="margin-top:10px"><button class="secondary" id="export">Download CSV / CSV保存</button></div>
+    </details>
+  </section>
+</main>
+<script src="jsQR.js"></script>
+<script>
+"use strict";
+const $ = id => document.getElementById(id);
+const STORE = "trace_records_v1", CONF = "trace_conf_v1";
+const DEFAULT_URL = "";   // ここに Apps Script の URL を入れておくと、設定しなくても使える
+
+/* ---------- storage ---------- */
+function load(k, d){ try{ const v = localStorage.getItem(k); return v ? JSON.parse(v) : d }catch(e){ return d } }
+function saveStore(recs){ try{ localStorage.setItem(STORE, JSON.stringify(recs)); return true }catch(e){ return false } }
+let recs = load(STORE, []);
+let conf = Object.assign({url: DEFAULT_URL, phone: ""}, load(CONF, {}));
+const q = new URLSearchParams(location.search);
+if (q.get("url")) { conf.url = q.get("url"); try{ localStorage.setItem(CONF, JSON.stringify(conf)) }catch(e){} }
+
+/* ---------- QR payload: TR1|SN|STAGE|RESULT|YYYYMMDDhhmmss|DEVICE|k=v;k=v ---------- */
+function parse(text){
+  const p = String(text).trim().split("|");
+  if (p.length < 6 || p[0] !== "TR1") return null;
+  const [_, sn, stage, result, dt, device] = p, values = p.slice(6).join("|");
+  if (!/^P\d{8}$/.test(sn) || !/^\d{14}$/.test(dt)) return null;
+  return {key: [sn, stage, dt, device].join("|"), sn, stage, result, dt, device, values, raw: String(text).trim()};
+}
+const fmtDT = dt => `${dt.slice(0,4)}/${dt.slice(4,6)}/${dt.slice(6,8)} ${dt.slice(8,10)}:${dt.slice(10,12)}`;
+
+function addPayload(text){
+  const r = parse(text);
+  if (!r) return {status: "invalid"};
+  if (recs.some(x => x.key === r.key)) return {status: "dup", rec: r};
+  r.scannedAt = new Date().toISOString(); r.sent = false;
+  recs.push(r);
+  if (!saveStore(recs)) { recs.pop(); return {status: "full"} }
+  render();
+  return {status: "new", rec: r};
+}
+window.__addPayload = addPayload;   // テスト用
+
+/* ---------- UI ---------- */
+function flash(kind, title, sub){
+  const f = $("flash");
+  f.style.display = "block";
+  f.style.background = kind === "ok" ? "var(--ok)" : kind === "ng" ? "var(--ng)" : "var(--warn)";
+  f.innerHTML = ""; f.append(title);
+  if (sub){ const s = document.createElement("small"); s.textContent = sub; f.append(s) }
+}
+function render(){
+  const wait = recs.filter(r => !r.sent).length;
+  $("nAll").textContent = recs.length; $("nWait").textContent = wait; $("nSent").textContent = recs.length - wait;
+  const tb = $("list"); tb.textContent = "";
+  recs.slice(-50).reverse().forEach(r => {
+    const tr = document.createElement("tr");
+    const cells = [r.sn, r.stage, null, fmtDT(r.dt), null];
+    cells.forEach((c, i) => {
+      const td = document.createElement("td");
+      if (i === 2){ const s = document.createElement("span"); s.className = "pill " + (r.result === "OK" ? "OK" : "NG"); s.textContent = r.result; td.append(s) }
+      else if (i === 4){ td.className = r.sent ? "sent" : "wait"; td.textContent = r.sent ? "sent" : "waiting" }
+      else td.textContent = c;
+      tr.append(td);
+    });
+    tb.append(tr);
+  });
+  $("more").textContent = recs.length > 50 ? `Showing latest 50 of ${recs.length}.` : "";
+  $("net").textContent = navigator.onLine ? (wait ? `Online · ${wait} to send` : "Online") : "Offline · saved on phone";
+  $("send").disabled = !wait || !navigator.onLine || sending;
+}
+
+/* ---------- camera + jsQR ---------- */
+let stream = null, raf = 0, lastText = "", lastAt = 0;
+const canvas = document.createElement("canvas"), ctx = canvas.getContext("2d", {willReadFrequently: true});
+async function startCam(){
+  try{
+    stream = await navigator.mediaDevices.getUserMedia({video: {facingMode: {ideal: "environment"}, width: {ideal: 1280}}, audio: false});
+  }catch(e){ flash("warn", "Camera not available / カメラが使えません", e.name === "NotAllowedError" ? "Allow camera access in the browser settings." : String(e.message || e)); return }
+  const v = $("video"); v.srcObject = stream; await v.play();
+  $("cam").classList.remove("off"); $("hint").textContent = "Point at the QR / QRに向ける";
+  $("start").disabled = true; $("stop").disabled = false;
+  tick();
+}
+function stopCam(){
+  cancelAnimationFrame(raf); raf = 0;
+  if (stream) stream.getTracks().forEach(t => t.stop()); stream = null;
+  $("cam").classList.add("off"); $("hint").textContent = "Press START / スタートを押す";
+  $("start").disabled = false; $("stop").disabled = true;
+}
+function tick(){
+  const v = $("video");
+  if (stream && v.readyState >= 2 && v.videoWidth){
+    const s = Math.min(1, 800 / Math.max(v.videoWidth, v.videoHeight));
+    canvas.width = Math.round(v.videoWidth * s); canvas.height = Math.round(v.videoHeight * s);
+    ctx.drawImage(v, 0, 0, canvas.width, canvas.height);
+    const img = ctx.getImageData(0, 0, canvas.width, canvas.height);
+    const code = jsQR(img.data, img.width, img.height, {inversionAttempts: "dontInvert"});
+    if (code && code.data && !(code.data === lastText && Date.now() - lastAt < 3000)){
+      lastText = code.data; lastAt = Date.now();
+      onScan(code.data);
+    }
+  }
+  if (stream) raf = requestAnimationFrame(tick);
+}
+function onScan(text){
+  const res = addPayload(text);
+  if (res.status === "new"){
+    const r = res.rec;
+    flash(r.result === "OK" ? "ok" : "ng", `SAVED ${r.sn}  ${r.stage}  ${r.result}`, `${fmtDT(r.dt)} · ${r.device}`);
+    try{ navigator.vibrate && navigator.vibrate(120) }catch(e){}
+    if (navigator.onLine) sendSoon();
+  } else if (res.status === "dup"){
+    flash("warn", `Already saved / 保存済み  ${res.rec.sn} ${res.rec.stage}`, "This QR was scanned before. Not saved again.");
+  } else if (res.status === "full"){
+    flash("ng", "Phone storage is full / 端末の保存領域がいっぱいです", "Send the data, then try again.");
+  } else {
+    flash("warn", "Not a trace QR / 対象外のQR", text.length > 40 ? text.slice(0, 40) + "…" : text);
+  }
+}
+
+/* ---------- send to Google Sheets (Apps Script) ---------- */
+let sending = false, timer = 0;
+function sendSoon(){ clearTimeout(timer); timer = setTimeout(sendNow, 1500) }
+async function sendNow(){
+  if (sending) return;
+  const wait = recs.filter(r => !r.sent);
+  if (!wait.length){ render(); return }
+  if (!conf.url){ $("msg").textContent = "Set the Apps Script URL in Settings first. / 設定でURLを入れてください。"; return }
+  if (!navigator.onLine){ $("msg").textContent = "Offline. Data stays on the phone. / オフラインです。端末に残ります。"; render(); return }
+  sending = true; render(); $("msg").textContent = "Sending… / 送信中…";
+  let okCount = 0, dupCount = 0;
+  try{
+    for (let i = 0; i < wait.length; i += 50){
+      const batch = wait.slice(i, i + 50);
+      const body = JSON.stringify({phone: conf.phone || "", records: batch.map(r => ({key: r.key, raw: r.raw, scannedAt: r.scannedAt}))});
+      const res = await fetch(conf.url, {method: "POST", headers: {"Content-Type": "text/plain;charset=utf-8"}, body, redirect: "follow"});
+      const data = await res.json();
+      if (!data.ok) throw new Error(data.error || "server error");
+      const done = new Set([...(data.added || []), ...(data.duplicate || [])]);
+      okCount += (data.added || []).length; dupCount += (data.duplicate || []).length;
+      recs.forEach(r => { if (done.has(r.key)) r.sent = true });
+      saveStore(recs);
+    }
+    $("msg").textContent = `Sent ${okCount}` + (dupCount ? ` (already in sheet: ${dupCount})` : "") + ` · ${new Date().toLocaleTimeString()}`;
+  }catch(e){
+    $("msg").textContent = "Could not send. Data stays on the phone and will be sent later. / 送信できませんでした。端末に残っています。 (" + (e.message || e) + ")";
+  }finally{ sending = false; render() }
+}
+
+/* ---------- settings ---------- */
+$("url").value = conf.url; $("phone").value = conf.phone;
+$("save").onclick = () => { conf.url = $("url").value.trim(); conf.phone = $("phone").value.trim(); try{ localStorage.setItem(CONF, JSON.stringify(conf)) }catch(e){} $("msg").textContent = "Saved. / 保存しました。"; sendSoon() };
+$("test").onclick = async () => {
+  const u = $("url").value.trim(); if (!u) return;
+  $("msg").textContent = "Testing… / テスト中…";
+  try{ const d = await (await fetch(u + (u.includes("?") ? "&" : "?") + "ping=1")).json(); $("msg").textContent = d.ok ? `Connected / 接続OK: ${d.sheet || ""} (${d.rows ?? "?"} rows)` : "Error: " + d.error }
+  catch(e){ $("msg").textContent = "Cannot connect / 接続できません: " + (e.message || e) }
+};
+$("export").onclick = () => {
+  const head = "scanned_at,serial,stage,result,datetime,device,values,sent\n";
+  const esc = s => `"${String(s).replace(/"/g, '""')}"`;
+  const body = recs.map(r => [r.scannedAt, r.sn, r.stage, r.result, fmtDT(r.dt), r.device, r.values, r.sent ? "yes" : "no"].map(esc).join(",")).join("\n");
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(new Blob(["﻿" + head + body], {type: "text/csv"}));
+  a.download = `trace_${new Date().toISOString().slice(0,10)}.csv`; a.click();
+};
+$("start").onclick = startCam; $("stop").onclick = stopCam; $("send").onclick = sendNow;
+addEventListener("online", () => { render(); sendSoon() }); addEventListener("offline", render);
+document.addEventListener("visibilitychange", () => { if (document.hidden) stopCam(); else sendSoon() });
+if (!conf.url) $("settings").open = true;
+render(); sendSoon();
+if ("serviceWorker" in navigator) navigator.serviceWorker.register("sw.js").catch(() => {});
+</script>
+</body>
+</html>
