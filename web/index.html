@@ -118,6 +118,7 @@ function addPayload(text){
   return {status: "new", rec: r};
 }
 window.__addPayload = addPayload;   // テスト用
+window.__onScan = t => onScan(t);    // テスト用
 
 /* ---------- UI ---------- */
 function flash(kind, title, sub){
@@ -181,7 +182,21 @@ function tick(){
   }
   if (stream) raf = requestAnimationFrame(tick);
 }
+/* 設定QR（…/trace-scan/…?url=…）をこの画面のカメラで読んだら、送り先を保存する。
+   iPhone のホーム画面版は Safari と保存場所が別なので、ホーム画面版の中で読めるようにしておく。 */
+function trySetupQR(text){
+  let u; try{ u = new URL(text) }catch(e){ return false }
+  const dest = u.searchParams.get("url");
+  if (!dest || !/^https:\/\/script\.google(usercontent)?\.com\//.test(dest)) return false;
+  conf.url = dest; try{ localStorage.setItem(CONF, JSON.stringify(conf)) }catch(e){}
+  $("url").value = conf.url;
+  flash("ok", "Setup done / 設定しました", "Send destination saved on this phone. / 送り先を保存しました。");
+  try{ navigator.vibrate && navigator.vibrate(120) }catch(e){}
+  sendSoon();
+  return true;
+}
 function onScan(text){
+  if (trySetupQR(text)) return;
   const res = addPayload(text);
   if (res.status === "new"){
     const r = res.rec;
